@@ -3,17 +3,15 @@ from fastapi.responses import PlainTextResponse
 
 app = FastAPI()
 
-# The Cloud holds the execution commands and settings
 state = {
-    "CMD_B": "0",    # Buy Lot Size
-    "CMD_S": "0",    # Sell Lot Size
-    "CMD_CB": "0",   # Close All Buys (1 or 0)
-    "CMD_CS": "0",   # Close All Sells (1 or 0)
-    "TP_B": "0",     # New Take Profit for Buys
-    "TP_S": "0",     # New Take Profit for Sells
-    "MODE": "0",     # Trade Mode
-    "PAUSE": "0",    # Pause Status
-    "LOCK": "0"      # Daily Lockout Status
+    "TP": "4.20",
+    "BSL": "50.0",
+    "SSL": "50.0",
+    "MODE": "0",     # 0=Dual, 1=Buy, 2=Sell
+    "PAUSE": "0",    # 1=Paused, 0=Running
+    "LOCK": "0",     # 1=Daily Target/SL Hit
+    "CMD_CB": "0",   # 1=Force Close Buys
+    "CMD_CS": "0"    # 1=Force Close Sells
 }
 
 @app.get("/api/state", response_class=PlainTextResponse)
