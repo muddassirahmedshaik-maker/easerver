@@ -10,7 +10,10 @@ state = {
     "CMD_CB": "0",   # Close All Buys (1 or 0)
     "CMD_CS": "0",   # Close All Sells (1 or 0)
     "TP_B": "0",     # New Take Profit for Buys
-    "TP_S": "0"      # New Take Profit for Sells
+    "TP_S": "0",     # New Take Profit for Sells
+    "MODE": "0",     # Trade Mode
+    "PAUSE": "0",    # Pause Status
+    "LOCK": "0"      # Daily Lockout Status
 }
 
 @app.get("/api/state", response_class=PlainTextResponse)
