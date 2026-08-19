@@ -3,7 +3,7 @@ from fastapi.responses import PlainTextResponse
 
 app = FastAPI()
 
-# The Cloud now holds specific execution commands for the Slave
+# The Cloud holds the execution commands and settings
 state = {
     "CMD_B": "0",    # Buy Lot Size
     "CMD_S": "0",    # Sell Lot Size
