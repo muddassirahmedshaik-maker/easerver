@@ -3,15 +3,11 @@ from fastapi.responses import PlainTextResponse
 
 app = FastAPI()
 
+# Only holds the live signal from the Master
 state = {
-    "TP": "4.20",
-    "BSL": "50.0",
-    "SSL": "50.0",
-    "MODE": "0",     # 0=Dual, 1=Buy, 2=Sell
-    "PAUSE": "0",    # 1=Paused, 0=Running
-    "LOCK": "0",     # 1=Daily Target/SL Hit
-    "CMD_CB": "0",   # 1=Force Close Buys
-    "CMD_CS": "0"    # 1=Force Close Sells
+    "SIGNAL": "NONE",   # Examples: "BUY_0.01", "SELL_0.02", "CLOSE_BUY", "CLOSE_SELL"
+    "TP_B": "0",        # Current Buy Basket TP
+    "TP_S": "0"         # Current Sell Basket TP
 }
 
 @app.get("/api/state", response_class=PlainTextResponse)
