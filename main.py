@@ -1,225 +1,230 @@
-//+------------------------------------------------------------------+
-//|                                Grid_Slave_Copier_Multi.mq5       |
-//|        Local Basket TP Calculation for Perfect Execution         |
-//+------------------------------------------------------------------+
-#property copyright "Your Custom EA"
-#property version   "3.1"
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
+import time
 
-#include <Trade\Trade.mqh>
-#include <Trade\PositionInfo.mqh>
+app = FastAPI()
 
-input string InpApiUrl      = "https://your-api-name.onrender.com"; 
-input int    InpMagicNumber = 123456; 
+# CHANGE THIS TO YOUR OWN SECRET ADMIN PASSWORD
+ADMIN_KEY = "9700774354"
 
-CTrade         trade;
-CPositionInfo  pos;
-
-ulong  last_processed_signal_id = 0;
-string g_auth_status            = "CHECKING...";
-int    g_days_remaining         = 0;
-long   g_account_number         = 0;
-double g_LiveTP_USD             = 4.20; // Default $4.20 target
-
-string SendAPIRequest(string endpoint) {
-   char post[], result[]; string headers;
-   string sep = (StringFind(endpoint, "?") >= 0) ? "&" : "?";
-   string full_url = InpApiUrl + endpoint + sep + "t=" + IntegerToString(GetTickCount());
-   int res = WebRequest("GET", full_url, NULL, NULL, 5000, post, 0, result, headers);
-   if(res == 200) return CharArrayToString(result);
-   return "";
+# Holds the active signal from Master
+state = {
+    "SIGNAL": "NONE",
+    "SIGNAL_ID": "0",
+    "TP_VAL": "4.20"  # Broadcast Dollar Target ($4.20) for local slave calculation
 }
 
-int OnInit() {
-   trade.SetExpertMagicNumber(InpMagicNumber);
-   g_account_number = AccountInfoInteger(ACCOUNT_LOGIN);
-   
-   ChartSetInteger(0, CHART_SHOW_TRADE_LEVELS, false);
-   ChartSetInteger(0, CHART_SHOW_OBJECT_DESCR, true);
-   ChartSetInteger(0, CHART_MODE, CHART_CANDLES);
-   ChartSetInteger(0, CHART_COLOR_CANDLE_BULL, clrMediumSeaGreen);
-   ChartSetInteger(0, CHART_COLOR_CANDLE_BEAR, clrFireBrick);
-   ChartSetInteger(0, CHART_COLOR_CHART_UP, clrMediumSeaGreen);
-   ChartSetInteger(0, CHART_COLOR_CHART_DOWN, clrFireBrick);
+# In-Memory Account Subscription Database
+# Format: { "account_number_str": expiration_timestamp_float }
+subscribers = {}
 
-   EventSetMillisecondTimer(1000);
-   return(INIT_SUCCEEDED);
-}
+# ==========================================
+# 1. ADMIN ENDPOINTS (Background Actions)
+# ==========================================
 
-void OnDeinit(const int reason) {
-   EventKillTimer();
-   DeleteCustomTradeLines();
-   Comment("");
-}
+@app.get("/api/grant")
+def grant_access(admin_key: str, account: str, days: int = 30):
+    if admin_key != ADMIN_KEY:
+        return PlainTextResponse("ERROR: Invalid Admin Key", status_code=401)
+    
+    current_time = time.time()
+    existing_expiry = subscribers.get(str(account), current_time)
+    
+    # If account is already active, extend from current expiry; otherwise start from today
+    start_point = max(current_time, existing_expiry)
+    new_expiry = start_point + (days * 86400)
+    
+    subscribers[str(account)] = new_expiry
+    return JSONResponse({"status": "success", "message": f"Account {account} granted {days} days."})
 
-double DollarsToPoints(double usd_amount) {
-   return (_Point > 0) ? (usd_amount / _Point) : 420.0;
-}
+@app.get("/api/revoke")
+def revoke_access(admin_key: str, account: str):
+    if admin_key != ADMIN_KEY:
+        return PlainTextResponse("ERROR: Invalid Admin Key", status_code=401)
+    
+    if str(account) in subscribers:
+        del subscribers[str(account)]
+        return JSONResponse({"status": "success", "message": f"Revoked Account {account}"})
+    return JSONResponse({"status": "error", "message": f"Account {account} not found"})
 
-void CloseAllBySide(long side) {
-   for(int i = PositionsTotal() - 1; i >= 0; i--) {
-      if(pos.SelectByIndex(i) && pos.Symbol() == _Symbol && pos.Magic() == InpMagicNumber && pos.PositionType() == side) {
-         trade.PositionClose(pos.Ticket());
-      }
-   }
-}
+@app.get("/api/users")
+def get_users(admin_key: str):
+    if admin_key != ADMIN_KEY:
+        return PlainTextResponse("ERROR: Invalid Admin Key", status_code=401)
+    
+    current_time = time.time()
+    user_list = []
+    
+    for acc, expiry in list(subscribers.items()):
+        days_left = max(0, int((expiry - current_time) / 86400))
+        status = "Active" if current_time <= expiry else "Expired"
+        user_list.append({
+            "account": acc,
+            "days_left": days_left,
+            "status": status,
+            "expiry_date": time.strftime('%Y-%m-%d %H:%M', time.gmtime(expiry))
+        })
+        
+    return JSONResponse({"users": user_list})
 
-// Automatically calculates exact TP based on Slave's OWN average price
-void UpdateLocalBasketTP(long position_type) {
-   double total_vol = 0;
-   double total_val = 0;
+# ==========================================
+# 2. EA ENDPOINTS (Trade Execution)
+# ==========================================
 
-   for(int i = PositionsTotal() - 1; i >= 0; i--) {
-      if(pos.SelectByIndex(i) && pos.Symbol() == _Symbol && pos.Magic() == InpMagicNumber && pos.PositionType() == position_type) {
-         total_vol += pos.Volume();
-         total_val += (pos.PriceOpen() * pos.Volume());
-      }
-   }
+@app.get("/api/state", response_class=PlainTextResponse)
+def get_state(account: str = ""):
+    current_time = time.time()
+    acc_str = str(account)
+    
+    # 1. Check if account is in subscription database
+    if acc_str not in subscribers:
+        return "AUTH=UNAUTHORIZED|DAYS=0"
+    
+    expiry = subscribers[acc_str]
+    
+    # 2. Check if subscription has expired
+    if current_time > expiry:
+        return "AUTH=EXPIRED|DAYS=0"
+    
+    # 3. Calculate remaining days
+    days_left = max(0, int((expiry - current_time) / 86400))
+    
+    # Return OK auth status along with active signal data
+    signal_data = "|".join([f"{k}={v}" for k, v in state.items()])
+    return f"AUTH=OK|DAYS={days_left}|{signal_data}"
 
-   if(total_vol == 0) return;
+@app.get("/api/update", response_class=PlainTextResponse)
+def update_state(request: Request):
+    params = request.query_params
+    for k, v in params.items():
+        if k in state:
+            state[k] = str(v)
+    
+    # Auto-generate a new unique ID whenever Master sends a trade or close command
+    if "SIGNAL" in params and params["SIGNAL"] != "NONE":
+        state["SIGNAL_ID"] = str(int(time.time() * 1000))
+        
+    return "OK"
 
-   double avg_price = total_val / total_vol;
-   double tp_pts = DollarsToPoints(g_LiveTP_USD);
-   double new_tp = NormalizeDouble(avg_price + ((position_type == POSITION_TYPE_BUY ? 1 : -1) * tp_pts * _Point), _Digits);
+# ==========================================
+# 3. WEB DASHBOARD UI
+# ==========================================
 
-   for(int i = PositionsTotal() - 1; i >= 0; i--) {
-      if(pos.SelectByIndex(i) && pos.Symbol() == _Symbol && pos.Magic() == InpMagicNumber && pos.PositionType() == position_type) {
-         if(MathAbs(pos.TakeProfit() - new_tp) > _Point / 2) {
-            trade.PositionModify(pos.Ticket(), 0, new_tp);
-         }
-      }
-   }
-}
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>EA License Manager</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-gray-900 text-white font-sans p-8">
+        <div class="max-w-4xl mx-auto">
+            <h1 class="text-3xl font-bold text-yellow-400 mb-8">Cloud EA License Manager</h1>
+            
+            <!-- Login Section -->
+            <div id="login-section" class="bg-gray-800 p-6 rounded-lg mb-8 border border-gray-700">
+                <label class="block mb-2 text-sm text-gray-400">Enter Admin Key to Access Dashboard:</label>
+                <div class="flex gap-4">
+                    <input type="password" id="admin-key" class="w-full bg-gray-900 border border-gray-600 rounded p-2 text-white" placeholder="MY_SECRET_ADMIN_123">
+                    <button onclick="loadUsers()" class="bg-blue-600 hover:bg-blue-500 px-6 py-2 rounded font-bold transition">Login</button>
+                </div>
+            </div>
 
-void OnTimer() {
-   string endpoint = StringFormat("/api/state?account=%d", g_account_number);
-   string data = SendAPIRequest(endpoint);
-   if(data == "") return; 
-   
-   string pairs[];
-   int count = StringSplit(data, '|', pairs);
-   
-   string current_signal = "NONE";
-   ulong current_signal_id = 0;
-   
-   for(int i=0; i<count; i++) {
-      string kv[];
-      if(StringSplit(pairs[i], '=', kv) == 2) {
-         if(kv[0] == "AUTH") g_auth_status = kv[1];
-         else if(kv[0] == "DAYS") g_days_remaining = (int)StringToInteger(kv[1]);
-         else if(kv[0] == "SIGNAL") current_signal = kv[1];
-         else if(kv[0] == "SIGNAL_ID") current_signal_id = (ulong)StringToInteger(kv[1]);
-         else if(kv[0] == "TP_VAL") g_LiveTP_USD = StringToDouble(kv[1]);
-      }
-   }
+            <div id="dashboard-content" class="hidden">
+                <!-- Add User Form -->
+                <div class="bg-gray-800 p-6 rounded-lg mb-8 border border-gray-700">
+                    <h2 class="text-xl font-bold mb-4 text-green-400">Grant / Extend Access</h2>
+                    <div class="flex gap-4">
+                        <input type="text" id="new-account" class="w-1/2 bg-gray-900 border border-gray-600 rounded p-2 text-white" placeholder="MT5 Account Number">
+                        <input type="number" id="new-days" class="w-1/4 bg-gray-900 border border-gray-600 rounded p-2 text-white" value="30" placeholder="Days">
+                        <button onclick="grantAccess()" class="w-1/4 bg-green-600 hover:bg-green-500 px-4 py-2 rounded font-bold transition">Add/Extend</button>
+                    </div>
+                </div>
 
-   if(g_auth_status != "OK") return; 
+                <!-- Active Users Table -->
+                <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                    <table class="w-full text-left border-collapse">
+                        <thead>
+                            <tr class="bg-gray-700 text-gray-300">
+                                <th class="p-4 border-b border-gray-600">Account Number</th>
+                                <th class="p-4 border-b border-gray-600">Status</th>
+                                <th class="p-4 border-b border-gray-600">Days Left</th>
+                                <th class="p-4 border-b border-gray-600">Expiry Date (UTC)</th>
+                                <th class="p-4 border-b border-gray-600">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="user-table-body">
+                            <!-- Rows injected by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
 
-   if(current_signal != "NONE" && current_signal_id > last_processed_signal_id) {
-      string cmd_parts[];
-      StringSplit(current_signal, '_', cmd_parts);
-      
-      if(cmd_parts[0] == "BUY") trade.Buy(StringToDouble(cmd_parts[1]), _Symbol, 0, 0, 0); 
-      else if(cmd_parts[0] == "SELL") trade.Sell(StringToDouble(cmd_parts[1]), _Symbol, 0, 0, 0);
-      else if(cmd_parts[0] == "CLOSE" && cmd_parts[1] == "BUY") CloseAllBySide(POSITION_TYPE_BUY);
-      else if(cmd_parts[0] == "CLOSE" && cmd_parts[1] == "SELL") CloseAllBySide(POSITION_TYPE_SELL);
-      
-      last_processed_signal_id = current_signal_id;
-   }
-}
+        <script>
+            let currentKey = "";
 
-void DrawCustomTradeLines() {
-   double buy_tp = 0, sell_tp = 0;
-   int active_buys = 0, active_sells = 0;
+            async function loadUsers() {
+                const keyInput = document.getElementById('admin-key').value;
+                if(!keyInput) return alert("Please enter an admin key.");
+                currentKey = keyInput;
 
-   for(int i=0; i<PositionsTotal(); i++) {
-      if(pos.SelectByIndex(i) && pos.Symbol() == _Symbol && pos.Magic() == InpMagicNumber) {
-         ulong ticket = pos.Ticket(); double price = pos.PriceOpen();
-         long type = pos.PositionType(); double vol = pos.Volume(); double tp = pos.TakeProfit();
+                const response = await fetch(`/api/users?admin_key=${currentKey}`);
+                if (!response.ok) return alert("Invalid Admin Key!");
 
-         string line_name = "Vis_Entry_" + IntegerToString((long)ticket);
+                const data = await response.json();
+                document.getElementById('login-section').classList.add('hidden');
+                document.getElementById('dashboard-content').classList.remove('hidden');
 
-         if(ObjectFind(0, line_name) < 0) {
-            ObjectCreate(0, line_name, OBJ_HLINE, 0, 0, price);
-            ObjectSetInteger(0, line_name, OBJPROP_STYLE, STYLE_DOT); 
-            ObjectSetInteger(0, line_name, OBJPROP_WIDTH, 1);
-            ObjectSetInteger(0, line_name, OBJPROP_HIDDEN, true);      
-            ObjectSetInteger(0, line_name, OBJPROP_SELECTABLE, false);
-         }
-         ObjectSetDouble(0, line_name, OBJPROP_PRICE, price);
+                const tbody = document.getElementById('user-table-body');
+                tbody.innerHTML = "";
 
-         if(type == POSITION_TYPE_BUY) {
-            ObjectSetInteger(0, line_name, OBJPROP_COLOR, clrDodgerBlue); 
-            ObjectSetString(0, line_name, OBJPROP_TEXT, StringFormat("Buy %.2f", vol));
-            if(tp > 0) buy_tp = tp; active_buys++;
-         } else if(type == POSITION_TYPE_SELL) {
-            ObjectSetInteger(0, line_name, OBJPROP_COLOR, clrRed); 
-            ObjectSetString(0, line_name, OBJPROP_TEXT, StringFormat("Sell %.2f", vol));
-            if(tp > 0) sell_tp = tp; active_sells++;
-         }
-      }
-   }
+                if(data.users.length === 0) {
+                    tbody.innerHTML = "<tr><td colspan='5' class='p-4 text-center text-gray-500'>No active subscriptions found.</td></tr>";
+                    return;
+                }
 
-   if(active_buys > 0 && buy_tp > 0) {
-      if(ObjectFind(0, "Vis_TP_Buy") < 0) {
-         ObjectCreate(0, "Vis_TP_Buy", OBJ_HLINE, 0, 0, buy_tp);
-         ObjectSetInteger(0, "Vis_TP_Buy", OBJPROP_COLOR, clrGold); 
-         ObjectSetInteger(0, "Vis_TP_Buy", OBJPROP_STYLE, STYLE_SOLID); ObjectSetInteger(0, "Vis_TP_Buy", OBJPROP_WIDTH, 2);
-         ObjectSetInteger(0, "Vis_TP_Buy", OBJPROP_HIDDEN, true); ObjectSetInteger(0, "Vis_TP_Buy", OBJPROP_SELECTABLE, false);
-      }
-      ObjectSetDouble(0, "Vis_TP_Buy", OBJPROP_PRICE, buy_tp); ObjectSetString(0, "Vis_TP_Buy", OBJPROP_TEXT, "BUY BASKET TP");
-   } else ObjectDelete(0, "Vis_TP_Buy");
+                data.users.forEach(user => {
+                    const statusColor = user.status === 'Active' ? 'text-green-400' : 'text-red-400';
+                    const row = `
+                        <tr class="hover:bg-gray-750 transition">
+                            <td class="p-4 border-b border-gray-700 font-bold">${user.account}</td>
+                            <td class="p-4 border-b border-gray-700 ${statusColor}">${user.status}</td>
+                            <td class="p-4 border-b border-gray-700">${user.days_left} Days</td>
+                            <td class="p-4 border-b border-gray-700 text-sm text-gray-400">${user.expiry_date}</td>
+                            <td class="p-4 border-b border-gray-700">
+                                <button onclick="revokeAccess('${user.account}')" class="text-xs bg-red-600 hover:bg-red-500 px-3 py-1 rounded font-bold">Revoke</button>
+                            </td>
+                        </tr>
+                    `;
+                    tbody.innerHTML += row;
+                });
+            }
 
-   if(active_sells > 0 && sell_tp > 0) {
-      if(ObjectFind(0, "Vis_TP_Sell") < 0) {
-         ObjectCreate(0, "Vis_TP_Sell", OBJ_HLINE, 0, 0, sell_tp);
-         ObjectSetInteger(0, "Vis_TP_Sell", OBJPROP_COLOR, clrGold); 
-         ObjectSetInteger(0, "Vis_TP_Sell", OBJPROP_STYLE, STYLE_SOLID); ObjectSetInteger(0, "Vis_TP_Sell", OBJPROP_WIDTH, 2);
-         ObjectSetInteger(0, "Vis_TP_Sell", OBJPROP_HIDDEN, true); ObjectSetInteger(0, "Vis_TP_Sell", OBJPROP_SELECTABLE, false);
-      }
-      ObjectSetDouble(0, "Vis_TP_Sell", OBJPROP_PRICE, sell_tp); ObjectSetString(0, "Vis_TP_Sell", OBJPROP_TEXT, "SELL BASKET TP");
-   } else ObjectDelete(0, "Vis_TP_Sell");
+            async function grantAccess() {
+                const acc = document.getElementById('new-account').value;
+                const days = document.getElementById('new-days').value;
+                if(!acc || !days) return alert("Enter account and days.");
 
-   for(int i = ObjectsTotal(0, 0, OBJ_HLINE) - 1; i >= 0; i--) {
-      string obj_name = ObjectName(0, i, 0, OBJ_HLINE);
-      if(StringFind(obj_name, "Vis_Entry_") == 0) {
-         ulong ticket = (ulong)StringToInteger(StringSubstr(obj_name, 10));
-         if(!PositionSelectByTicket(ticket)) ObjectDelete(0, obj_name);
-      }
-   }
-}
+                const res = await fetch(`/api/grant?admin_key=${currentKey}&account=${acc}&days=${days}`);
+                const data = await res.json();
+                alert(data.message);
+                loadUsers(); // Refresh table
+            }
 
-void DeleteCustomTradeLines() {
-   ObjectDelete(0, "Vis_TP_Buy"); ObjectDelete(0, "Vis_TP_Sell");
-   for(int i = ObjectsTotal(0, 0, OBJ_HLINE) - 1; i >= 0; i--) {
-      string obj_name = ObjectName(0, i, 0, OBJ_HLINE);
-      if(StringFind(obj_name, "Vis_Entry_") == 0) ObjectDelete(0, obj_name);
-   }
-}
-
-void OnTick() {
-   // Recalculate TP locally on every tick
-   UpdateLocalBasketTP(POSITION_TYPE_BUY);
-   UpdateLocalBasketTP(POSITION_TYPE_SELL);
-   
-   DrawCustomTradeLines(); 
-   
-   string status_msg;
-   if(g_auth_status == "OK") {
-      status_msg = StringFormat("ACTIVE - SUBSCRIPTION OK (%d Days Left)", g_days_remaining);
-   } else if(g_auth_status == "EXPIRED") {
-      status_msg = "EXPIRED - PLEASE RENEW YOUR SUBSCRIPTION";
-   } else {
-      status_msg = "ACCESS DENIED - ACCOUNT NOT REGISTERED";
-   }
-
-   Comment(StringFormat(
-      "============================================\n" +
-      " SLAVE COPIER SUBSCRIPTION SYSTEM           \n" +
-      "============================================\n" +
-      " MT5 Account No  : %d\n" +
-      " Target Basket TP: $%.2f\n" +
-      " License Status  : %s\n" +
-      "============================================",
-      g_account_number, g_LiveTP_USD, status_msg
-   ));
-}
+            async function revokeAccess(acc) {
+                if(!confirm(`Are you sure you want to instantly revoke access for ${acc}?`)) return;
+                const res = await fetch(`/api/revoke?admin_key=${currentKey}&account=${acc}`);
+                const data = await res.json();
+                alert(data.message);
+                loadUsers(); // Refresh table
+            }
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
