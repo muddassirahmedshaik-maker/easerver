@@ -4,23 +4,15 @@ import time
 
 app = FastAPI()
 
-# CHANGE THIS TO YOUR OWN SECRET ADMIN PASSWORD
-ADMIN_KEY = "9700774354"
+ADMIN_KEY = "MY_SECRET_ADMIN_123"
 
-# Holds the active signal from Master
 state = {
     "SIGNAL": "NONE",
     "SIGNAL_ID": "0",
-    "TP_VAL": "4.20"  # Broadcast Dollar Target ($4.20) for local slave calculation
+    "TP_VAL": "4.20" 
 }
 
-# In-Memory Account Subscription Database
-# Format: { "account_number_str": expiration_timestamp_float }
 subscribers = {}
-
-# ==========================================
-# 1. ADMIN ENDPOINTS (Background Actions)
-# ==========================================
 
 @app.get("/api/grant")
 def grant_access(admin_key: str, account: str, days: int = 30):
@@ -30,7 +22,6 @@ def grant_access(admin_key: str, account: str, days: int = 30):
     current_time = time.time()
     existing_expiry = subscribers.get(str(account), current_time)
     
-    # If account is already active, extend from current expiry; otherwise start from today
     start_point = max(current_time, existing_expiry)
     new_expiry = start_point + (days * 86400)
     
@@ -67,29 +58,19 @@ def get_users(admin_key: str):
         
     return JSONResponse({"users": user_list})
 
-# ==========================================
-# 2. EA ENDPOINTS (Trade Execution)
-# ==========================================
-
 @app.get("/api/state", response_class=PlainTextResponse)
 def get_state(account: str = ""):
     current_time = time.time()
     acc_str = str(account)
     
-    # 1. Check if account is in subscription database
     if acc_str not in subscribers:
         return "AUTH=UNAUTHORIZED|DAYS=0"
     
     expiry = subscribers[acc_str]
-    
-    # 2. Check if subscription has expired
     if current_time > expiry:
         return "AUTH=EXPIRED|DAYS=0"
     
-    # 3. Calculate remaining days
     days_left = max(0, int((expiry - current_time) / 86400))
-    
-    # Return OK auth status along with active signal data
     signal_data = "|".join([f"{k}={v}" for k, v in state.items()])
     return f"AUTH=OK|DAYS={days_left}|{signal_data}"
 
@@ -100,15 +81,10 @@ def update_state(request: Request):
         if k in state:
             state[k] = str(v)
     
-    # Auto-generate a new unique ID whenever Master sends a trade or close command
     if "SIGNAL" in params and params["SIGNAL"] != "NONE":
         state["SIGNAL_ID"] = str(int(time.time() * 1000))
         
     return "OK"
-
-# ==========================================
-# 3. WEB DASHBOARD UI
-# ==========================================
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
@@ -125,7 +101,6 @@ def dashboard():
         <div class="max-w-4xl mx-auto">
             <h1 class="text-3xl font-bold text-yellow-400 mb-8">Cloud EA License Manager</h1>
             
-            <!-- Login Section -->
             <div id="login-section" class="bg-gray-800 p-6 rounded-lg mb-8 border border-gray-700">
                 <label class="block mb-2 text-sm text-gray-400">Enter Admin Key to Access Dashboard:</label>
                 <div class="flex gap-4">
@@ -135,7 +110,6 @@ def dashboard():
             </div>
 
             <div id="dashboard-content" class="hidden">
-                <!-- Add User Form -->
                 <div class="bg-gray-800 p-6 rounded-lg mb-8 border border-gray-700">
                     <h2 class="text-xl font-bold mb-4 text-green-400">Grant / Extend Access</h2>
                     <div class="flex gap-4">
@@ -145,7 +119,6 @@ def dashboard():
                     </div>
                 </div>
 
-                <!-- Active Users Table -->
                 <div class="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
                     <table class="w-full text-left border-collapse">
                         <thead>
@@ -158,7 +131,6 @@ def dashboard():
                             </tr>
                         </thead>
                         <tbody id="user-table-body">
-                            <!-- Rows injected by JavaScript -->
                         </tbody>
                     </table>
                 </div>
@@ -213,7 +185,7 @@ def dashboard():
                 const res = await fetch(`/api/grant?admin_key=${currentKey}&account=${acc}&days=${days}`);
                 const data = await res.json();
                 alert(data.message);
-                loadUsers(); // Refresh table
+                loadUsers(); 
             }
 
             async function revokeAccess(acc) {
@@ -221,7 +193,7 @@ def dashboard():
                 const res = await fetch(`/api/revoke?admin_key=${currentKey}&account=${acc}`);
                 const data = await res.json();
                 alert(data.message);
-                loadUsers(); // Refresh table
+                loadUsers(); 
             }
         </script>
     </body>
