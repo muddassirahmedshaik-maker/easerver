@@ -20,7 +20,6 @@ state = {
 subscribers = {}
 
 # --- ADMIN ENDPOINT: GRANT OR EXTEND ACCESS ---
-# Example URL: https://your-api.onrender.com/api/grant?admin_key=MY_SECRET_ADMIN_123&account=12345678&days=30
 @app.get("/api/grant", response_class=PlainTextResponse)
 def grant_access(admin_key: str, account: str, days: int = 30):
     if admin_key != ADMIN_KEY:
@@ -29,7 +28,6 @@ def grant_access(admin_key: str, account: str, days: int = 30):
     current_time = time.time()
     existing_expiry = subscribers.get(str(account), current_time)
     
-    # If account is already active, extend from current expiry; otherwise start from today
     start_point = max(current_time, existing_expiry)
     new_expiry = start_point + (days * 86400)
     
@@ -37,7 +35,6 @@ def grant_access(admin_key: str, account: str, days: int = 30):
     return f"SUCCESS: Account {account} granted {days} days of access until {time.ctime(new_expiry)}"
 
 # --- ADMIN ENDPOINT: REVOKE ACCESS ---
-# Example URL: https://your-api.onrender.com/api/revoke?admin_key=MY_SECRET_ADMIN_123&account=12345678
 @app.get("/api/revoke", response_class=PlainTextResponse)
 def revoke_access(admin_key: str, account: str):
     if admin_key != ADMIN_KEY:
@@ -54,20 +51,20 @@ def get_state(account: str = ""):
     current_time = time.time()
     acc_str = str(account)
     
-    # 1. Check if account is in subscription database
+    # 1. Check if account is authorized
     if acc_str not in subscribers:
         return "AUTH=UNAUTHORIZED|DAYS=0"
     
     expiry = subscribers[acc_str]
     
-    # 2. Check if subscription has expired
+    # 2. Check if subscription expired
     if current_time > expiry:
         return "AUTH=EXPIRED|DAYS=0"
     
     # 3. Calculate remaining days
     days_left = max(0, int((expiry - current_time) / 86400))
     
-    # Return OK auth status along with active signal data
+    # Return OK auth status and signal data
     signal_data = "|".join([f"{k}={v}" for k, v in state.items()])
     return f"AUTH=OK|DAYS={days_left}|{signal_data}"
 
