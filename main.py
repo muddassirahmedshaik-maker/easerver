@@ -5,7 +5,7 @@ import time
 app = FastAPI()
 
 # CHANGE THIS TO YOUR OWN SECRET ADMIN PASSWORD
-ADMIN_KEY = "MY_SECRET_ADMIN_123"
+ADMIN_KEY = "9700774354"
 
 # Holds the active signal from Master
 state = {
