@@ -4,7 +4,7 @@ import time
 
 app = FastAPI()
 
-ADMIN_KEY = "MY_SECRET_ADMIN_123"
+ADMIN_KEY = "9700774354"
 
 state = {
     "SIGNAL": "NONE",
