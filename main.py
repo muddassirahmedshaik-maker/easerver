@@ -1,13 +1,14 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
+import time
 
 app = FastAPI()
 
-# Only holds the live signal from the Master
 state = {
-    "SIGNAL": "NONE",   # Examples: "BUY_0.01", "SELL_0.02", "CLOSE_BUY", "CLOSE_SELL"
-    "TP_B": "0",        # Current Buy Basket TP
-    "TP_S": "0"         # Current Sell Basket TP
+    "SIGNAL": "NONE",
+    "SIGNAL_ID": "0",
+    "TP_B": "0",
+    "TP_S": "0"
 }
 
 @app.get("/api/state", response_class=PlainTextResponse)
@@ -20,4 +21,9 @@ def update_state(request: Request):
     for k, v in params.items():
         if k in state:
             state[k] = str(v)
+    
+    # Auto-generate a new unique ID whenever Master sends a trade or close command
+    if "SIGNAL" in params and params["SIGNAL"] != "NONE":
+        state["SIGNAL_ID"] = str(int(time.time() * 1000))
+        
     return "OK"
