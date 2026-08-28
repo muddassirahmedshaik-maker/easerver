@@ -5,13 +5,6 @@ import time
 app = FastAPI()
 
 ADMIN_KEY = "9700774354"
-
-state = {
-    "SIGNAL": "NONE",
-    "SIGNAL_ID": "0",
-    "TP_VAL": "4.20" 
-}
-
 subscribers = {}
 
 @app.get("/api/grant")
@@ -58,8 +51,8 @@ def get_users(admin_key: str):
         
     return JSONResponse({"users": user_list})
 
-@app.get("/api/state", response_class=PlainTextResponse)
-def get_state(account: str = ""):
+@app.get("/api/auth", response_class=PlainTextResponse)
+def check_auth(account: str = ""):
     current_time = time.time()
     acc_str = str(account)
     
@@ -71,20 +64,7 @@ def get_state(account: str = ""):
         return "AUTH=EXPIRED|DAYS=0"
     
     days_left = max(0, int((expiry - current_time) / 86400))
-    signal_data = "|".join([f"{k}={v}" for k, v in state.items()])
-    return f"AUTH=OK|DAYS={days_left}|{signal_data}"
-
-@app.get("/api/update", response_class=PlainTextResponse)
-def update_state(request: Request):
-    params = request.query_params
-    for k, v in params.items():
-        if k in state:
-            state[k] = str(v)
-    
-    if "SIGNAL" in params and params["SIGNAL"] != "NONE":
-        state["SIGNAL_ID"] = str(int(time.time() * 1000))
-        
-    return "OK"
+    return f"AUTH=OK|DAYS={days_left}"
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
