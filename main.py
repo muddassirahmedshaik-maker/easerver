@@ -1,11 +1,20 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse
 import time
+import redis
 
 app = FastAPI()
 
 ADMIN_KEY = "9700774354"
-subscribers = {}
+
+# Connect to your Upstash Redis database using the credentials from your screenshot
+db = redis.Redis(
+    host='aware-louse-249355.upstash.io',
+    port=6379,
+    password='gQAAAAAAA84LAAIgcDEyZWYyYzQwMWM3OGU0NzMzOTFmZjU3ZmZmNzc1ODc1OA',
+    ssl=True,
+    decode_responses=True # Important: Keeps data formatted as text strings
+)
 
 @app.get("/api/grant")
 def grant_access(admin_key: str, account: str, days: int = 30):
@@ -13,12 +22,17 @@ def grant_access(admin_key: str, account: str, days: int = 30):
         return PlainTextResponse("ERROR: Invalid Admin Key", status_code=401)
     
     current_time = time.time()
-    existing_expiry = subscribers.get(str(account), current_time)
+    
+    # Read from cloud DB instead of local dictionary
+    existing_expiry = db.get(str(account)) 
+    existing_expiry = float(existing_expiry) if existing_expiry else current_time
     
     start_point = max(current_time, existing_expiry)
     new_expiry = start_point + (days * 86400)
     
-    subscribers[str(account)] = new_expiry
+    # Save to cloud DB
+    db.set(str(account), new_expiry) 
+    
     return JSONResponse({"status": "success", "message": f"Account {account} granted {days} days."})
 
 @app.get("/api/revoke")
@@ -26,8 +40,8 @@ def revoke_access(admin_key: str, account: str):
     if admin_key != ADMIN_KEY:
         return PlainTextResponse("ERROR: Invalid Admin Key", status_code=401)
     
-    if str(account) in subscribers:
-        del subscribers[str(account)]
+    if db.exists(str(account)):
+        db.delete(str(account)) # Delete from cloud DB
         return JSONResponse({"status": "success", "message": f"Revoked Account {account}"})
     return JSONResponse({"status": "error", "message": f"Account {account} not found"})
 
@@ -39,15 +53,20 @@ def get_users(admin_key: str):
     current_time = time.time()
     user_list = []
     
-    for acc, expiry in list(subscribers.items()):
-        days_left = max(0, int((expiry - current_time) / 86400))
-        status = "Active" if current_time <= expiry else "Expired"
-        user_list.append({
-            "account": acc,
-            "days_left": days_left,
-            "status": status,
-            "expiry_date": time.strftime('%Y-%m-%d %H:%M', time.gmtime(expiry))
-        })
+    # Fetch all keys and values from Redis
+    all_keys = db.keys()
+    for acc in all_keys:
+        expiry = db.get(acc)
+        if expiry:
+            expiry_float = float(expiry)
+            days_left = max(0, int((expiry_float - current_time) / 86400))
+            status = "Active" if current_time <= expiry_float else "Expired"
+            user_list.append({
+                "account": acc,
+                "days_left": days_left,
+                "status": status,
+                "expiry_date": time.strftime('%Y-%m-%d %H:%M', time.gmtime(expiry_float))
+            })
         
     return JSONResponse({"users": user_list})
 
@@ -56,14 +75,16 @@ def check_auth(account: str = ""):
     current_time = time.time()
     acc_str = str(account)
     
-    if acc_str not in subscribers:
-        return "AUTH=UNAUTHORIZED|DAYS=0"
+    expiry = db.get(acc_str)
     
-    expiry = subscribers[acc_str]
-    if current_time > expiry:
+    if not expiry:
+        return "AUTH=UNAUTHORIZED|DAYS=0"
+        
+    expiry_float = float(expiry)
+    if current_time > expiry_float:
         return "AUTH=EXPIRED|DAYS=0"
     
-    days_left = max(0, int((expiry - current_time) / 86400))
+    days_left = max(0, int((expiry_float - current_time) / 86400))
     return f"AUTH=OK|DAYS={days_left}"
 
 @app.get("/dashboard", response_class=HTMLResponse)
